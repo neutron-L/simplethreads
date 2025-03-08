@@ -208,7 +208,7 @@ void sthread_user_mutex_free(sthread_mutex_t lock) {
 }
 
 void sthread_user_mutex_lock(sthread_mutex_t lock) {
-    while (lock->status == BLOCK) {
+    while (lock->status == LOCKED) {
         running_thread->status = BLOCK;
         sthread_enqueue(lock->wait_queue, running_thread);
         schedule(SIG_JOIN);
