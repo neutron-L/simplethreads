@@ -109,15 +109,15 @@ void *sthread_user_join(sthread_t t) {
         return EDEADLK;
     } else if (!t->joinable) {
         return EINVAL;
-    } 
-    
+    }
+
     if (t->status != TERMINATE) {
         // 等待
         printf("%d join %d\n", running_thread->tid, t->tid);
         running_thread->status = BLOCK;
         sthread_enqueue(t->wait_queue, running_thread);
         schedule(SIG_JOIN);
-    } 
+    }
 
     // 找到线程并回收它
     sthread_t thread;
@@ -130,7 +130,7 @@ void *sthread_user_join(sthread_t t) {
         printf("cannot find terminate thread %d\n", t->tid);
         exit(1);
     }
-    void * ret = thread->ret;
+    void *ret = thread->ret;
     sthread_free(thread);
     return ret;
 }
@@ -147,11 +147,14 @@ static void schedule(int signum) {
     sthread_t thread;
 
     thread = sthread_dequeue(ready_queue);
-    assert(thread->status == RUNNABLE);
+    printf("%d to run\n", thread->tid);
+    if (thread->status != RUNNABLE) {
+        printf("%d should be runnable\n", thread->tid);
+        exit(1);
+    }
     thread->status = RUNNING;
     if (signum == SIG_YIELD) {
         running_thread->status = RUNNABLE;
-        sthread_enqueue(ready_queue, running_thread);
     }
     sthread_t temp = thread;
     thread = running_thread;
@@ -215,6 +218,7 @@ void sthread_user_mutex_lock(sthread_mutex_t lock) {
     }
     lock->status = LOCKED;
     lock->owner = running_thread->tid;
+    printf("%d get lock\n", running_thread->tid);
 }
 
 void sthread_user_mutex_unlock(sthread_mutex_t lock) {
@@ -228,25 +232,51 @@ void sthread_user_mutex_unlock(sthread_mutex_t lock) {
         thread->status = RUNNABLE;
         sthread_enqueue(ready_queue, thread);
     }
+    printf("%d release lock\n", running_thread->tid);
 }
 
 struct _sthread_cond {
     /* Fill in condition variable structure */
+    sthread_queue_t wait_queue;
 };
 
 sthread_cond_t sthread_user_cond_init(void) {
-    return NULL;
+    sthread_cond_t cond = (sthread_cond_t)malloc(sizeof(struct _sthread_cond));
+    if (cond != NULL) {
+        cond->wait_queue = sthread_new_queue();
+    }
+    return cond;
 }
 
 void sthread_user_cond_free(sthread_cond_t cond) {
+    sthread_free_queue(cond->wait_queue);
+    free(cond);
 }
 
 void sthread_user_cond_signal(sthread_cond_t cond) {
+    sthread_t thread;
+    if ((thread = sthread_dequeue(cond->wait_queue))) {
+        thread->status = RUNNABLE;
+        printf("%d to ready\n", thread->tid);
+        sthread_enqueue(ready_queue, thread);
+    }
 }
 
 void sthread_user_cond_broadcast(sthread_cond_t cond) {
+    sthread_t thread;
+    while ((thread = sthread_dequeue(cond->wait_queue))) {
+        thread->status = RUNNABLE;
+        printf("%d to ready\n", thread->tid);
+        sthread_enqueue(ready_queue, thread);
+    }
 }
 
 void sthread_user_cond_wait(sthread_cond_t cond,
                             sthread_mutex_t lock) {
+    running_thread->status = BLOCK;
+    printf("%d to wait cond\n", running_thread->tid);
+    sthread_enqueue(cond->wait_queue, running_thread);
+    sthread_user_mutex_unlock(lock);
+    schedule(SIG_JOIN);
+    sthread_user_mutex_lock(lock);
 }
