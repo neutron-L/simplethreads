@@ -23,9 +23,9 @@
 #include <errno.h>
 #include <signal.h>
 
-#define SIG_JOIN  SIGUSR1
-#define SIG_YIELD SIGUSR1
-#define SIG_EXIT  SIGUSR2
+#define SIG_JOIN 512
+#define SIG_YIELD 513
+#define SIG_EXIT 514
 
 enum ThreadStatus {
     RUNNING,
@@ -93,31 +93,46 @@ void sthread_user_exit(void *ret) {
     // 检查join的线程
     while ((wait_thread = sthread_dequeue(running_thread->wait_queue))) {
         wait_thread->status = RUNNABLE;
-        wait_thread->ret = ret;
         sthread_enqueue(ready_queue, wait_thread);
     }
 
     // 加入terminate队列等待资源释放
     running_thread->status = TERMINATE;
+    running_thread->ret = ret;
+    printf("%d exit\n", running_thread->tid);
     sthread_enqueue(terminate_queue, running_thread);
     schedule(SIG_EXIT);
 }
 
 void *sthread_user_join(sthread_t t) {
-    if (t->status == RUNNING) {
+    if (t->tid == running_thread->tid) {
         return EDEADLK;
-    } else if (t->status == TERMINATE) {
-        return ESRCH;
     } else if (!t->joinable) {
         return EINVAL;
+    } 
+    
+    if (t->status != TERMINATE) {
+        // 等待
+        printf("%d join %d\n", running_thread->tid, t->tid);
+        running_thread->status = BLOCK;
+        sthread_enqueue(t->wait_queue, running_thread);
+        schedule(SIG_JOIN);
+    } 
+
+    // 找到线程并回收它
+    sthread_t thread;
+    int size = sthread_queue_size(terminate_queue);
+    while ((thread = sthread_dequeue(terminate_queue))->tid != t->tid && size-- > 0) {
+        sthread_enqueue(terminate_queue, thread);
     }
 
-    
-    running_thread->status = BLOCK;
-    sthread_enqueue(t->wait_queue, running_thread);
-    schedule(SIG_JOIN);
-
-    return NULL;
+    if (size <= 0) {
+        printf("cannot find terminate thread %d\n", t->tid);
+        exit(1);
+    }
+    void * ret = thread->ret;
+    sthread_free(thread);
+    return ret;
 }
 
 void sthread_user_yield(void) {
@@ -130,32 +145,33 @@ void sthread_user_yield(void) {
 static void schedule(int signum) {
     // 默认头部的线程就是当前执行的线程（RUNNING）
     sthread_t thread;
-    
-    thread = sthread_dequeue(ready_queue);
-    sthread_enqueue(ready_queue, running_thread);
 
+    thread = sthread_dequeue(ready_queue);
+    assert(thread->status == RUNNABLE);
     thread->status = RUNNING;
-    if (signum != SIG_EXIT) {
+    if (signum == SIG_YIELD) {
         running_thread->status = RUNNABLE;
+        sthread_enqueue(ready_queue, running_thread);
     }
     sthread_t temp = thread;
     thread = running_thread;
     running_thread = temp;
     sthread_switch(thread->saved_ctx, running_thread->saved_ctx);
 
-    while ((thread = sthread_dequeue(terminate_queue))) {
-        sthread_free(thread);
-    }
+    // while ((thread = sthread_dequeue(terminate_queue))) {
+    //     sthread_free(thread);
+    //     continue;
+    // }
 }
 
 static void sthread_free(sthread_t thread) {
     sthread_free_ctx(thread->saved_ctx);
-    sthread_free(thread->wait_queue);
+    sthread_free_queue(thread->wait_queue);
     free(thread);
 }
 
 static void sthread_stub(void) {
-    void * ret = running_thread->start_routine(running_thread->arg);
+    void *ret = (void *)running_thread->start_routine(running_thread->arg);
     sthread_user_exit(ret);
 }
 
