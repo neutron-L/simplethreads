@@ -135,7 +135,9 @@ static void schedule(int signum) {
     sthread_enqueue(ready_queue, running_thread);
 
     thread->status = RUNNING;
-    running_thread->status = RUNNABLE;
+    if (signum != SIG_EXIT) {
+        running_thread->status = RUNNABLE;
+    }
     sthread_t temp = thread;
     thread = running_thread;
     running_thread = temp;
