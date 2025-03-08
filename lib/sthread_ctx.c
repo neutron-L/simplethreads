@@ -61,7 +61,7 @@ sthread_ctx_t *sthread_new_ctx(sthread_ctx_start_func_t func) {
    * i386 code), but I don't think it makes any big difference, except
    * for reducing the size of the stack by 16 bytes.
    */
-  ctx->sp = ctx->stackbase + sthread_stack_size - 16;
+  ctx->sp = ctx->stackbase + sthread_stack_size - 24;
 
   sthread_init_stack(ctx, func);
 
