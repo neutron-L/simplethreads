@@ -180,22 +180,54 @@ static void sthread_stub(void) {
 /*********************************************************************/
 /* Part 2: Synchronization Primitives                                */
 /*********************************************************************/
+enum LockStatus {
+    UNLOCKED,
+    LOCKED,
+};
 
 struct _sthread_mutex {
     /* Fill in mutex data structure */
+    enum LockStatus status;
+    int owner;
+    sthread_queue_t wait_queue;
 };
 
 sthread_mutex_t sthread_user_mutex_init() {
-    return NULL;
+    sthread_mutex_t lock = (sthread_mutex_t)malloc(sizeof(struct _sthread_mutex));
+    if (lock != NULL) {
+        lock->status = UNLOCKED;
+        lock->owner = -1;
+        lock->wait_queue = sthread_new_queue();
+    }
+    return lock;
 }
 
 void sthread_user_mutex_free(sthread_mutex_t lock) {
+    sthread_free_queue(lock->wait_queue);
+    free(lock);
 }
 
 void sthread_user_mutex_lock(sthread_mutex_t lock) {
+    while (lock->status == BLOCK) {
+        running_thread->status = BLOCK;
+        sthread_enqueue(lock->wait_queue, running_thread);
+        schedule(SIG_JOIN);
+    }
+    lock->status = LOCKED;
+    lock->owner = running_thread->tid;
 }
 
 void sthread_user_mutex_unlock(sthread_mutex_t lock) {
+    assert(lock->owner == running_thread->tid);
+    assert(lock->status == LOCKED);
+    lock->status = UNLOCKED;
+    lock->owner = -1;
+
+    sthread_t thread;
+    while ((thread = sthread_dequeue(lock->wait_queue))) {
+        thread->status = RUNNABLE;
+        sthread_enqueue(ready_queue, thread);
+    }
 }
 
 struct _sthread_cond {
