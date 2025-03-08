@@ -101,6 +101,7 @@ void sthread_user_exit(void *ret) {
     running_thread->ret = ret;
     printf("%d exit\n", running_thread->tid);
     sthread_enqueue(terminate_queue, running_thread);
+
     schedule(SIG_EXIT);
 }
 
@@ -122,13 +123,16 @@ void *sthread_user_join(sthread_t t) {
     // 找到线程并回收它
     sthread_t thread;
     int size = sthread_queue_size(terminate_queue);
-    while ((thread = sthread_dequeue(terminate_queue))->tid != t->tid && size-- > 0) {
+    while ((thread = sthread_dequeue(terminate_queue)) && thread->tid != t->tid && size-- > 0) {
         sthread_enqueue(terminate_queue, thread);
     }
 
     if (size <= 0) {
         printf("cannot find terminate thread %d\n", t->tid);
-        exit(1);
+        if (thread) {
+            sthread_enqueue(terminate_queue, thread);
+        }
+        return ESRCH;
     }
     void *ret = thread->ret;
     sthread_free(thread);
@@ -156,15 +160,23 @@ static void schedule(int signum) {
     if (signum == SIG_YIELD) {
         running_thread->status = RUNNABLE;
     }
+
     sthread_t temp = thread;
     thread = running_thread;
     running_thread = temp;
     sthread_switch(thread->saved_ctx, running_thread->saved_ctx);
 
-    // while ((thread = sthread_dequeue(terminate_queue))) {
-    //     sthread_free(thread);
-    //     continue;
-    // }
+    int size = sthread_queue_size(terminate_queue);
+    while ((thread = sthread_dequeue(terminate_queue)) && size--) {
+        if (!thread->joinable) {
+            sthread_free(thread);
+        } else {
+            sthread_enqueue(terminate_queue, thread);
+        }
+    }
+    if (thread && thread->joinable) {
+        sthread_enqueue(terminate_queue, thread);
+    }
 }
 
 static void sthread_free(sthread_t thread) {
