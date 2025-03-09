@@ -19,11 +19,13 @@
 #include <sthread_queue.h>
 #include <sthread_user.h>
 
+#include <sthread_preempt.h>
+
 // 需要里面的一些错误码
 #include <errno.h>
 #include <signal.h>
 
-#define DEBUG 0
+#define DEBUG 1
 
 #define DEBUG_PRINT(fmt, ...)                      \
     do {                                           \
@@ -74,11 +76,13 @@ void sthread_user_init(void) {
     running_thread->tid = next_id++;
     running_thread->saved_ctx = sthread_new_blank_ctx();
 
-    sthread_timer_init(schedule, 50);
+    sthread_preemption_init(sthread_user_yield, 50);
 }
 
 sthread_t sthread_user_create(sthread_start_func_t start_routine, void *arg,
                               int joinable) {
+    int oldvalue = splx(HIGH);
+
     sthread_t thread = (sthread_t)malloc(sizeof(struct _sthread));
     thread->saved_ctx = sthread_new_ctx(sthread_stub);
     thread->status = RUNNABLE;
@@ -91,12 +95,16 @@ sthread_t sthread_user_create(sthread_start_func_t start_routine, void *arg,
     thread->wait_queue = sthread_new_queue();
 
     sthread_enqueue(ready_queue, thread);
+    splx(oldvalue);
 
     return thread;
 }
 
 void sthread_user_exit(void *ret) {
     sthread_t wait_thread = NULL;
+
+    int oldvalue = splx(HIGH);
+
     // 检查join的线程
     while ((wait_thread = sthread_dequeue(running_thread->wait_queue))) {
         wait_thread->status = RUNNABLE;
@@ -108,8 +116,9 @@ void sthread_user_exit(void *ret) {
     running_thread->ret = ret;
     DEBUG_PRINT("%d exit\n", running_thread->tid);
     sthread_enqueue(terminate_queue, running_thread);
-
     schedule();
+    splx(oldvalue);
+    assert(oldvalue == LOW);
 }
 
 void *sthread_user_join(sthread_t t) {
@@ -119,6 +128,7 @@ void *sthread_user_join(sthread_t t) {
         return EINVAL;
     }
 
+    int oldvalue = splx(HIGH);
     if (t->status != TERMINATE) {
         // 等待
         DEBUG_PRINT("%d join %d\n", running_thread->tid, t->tid);
@@ -139,18 +149,28 @@ void *sthread_user_join(sthread_t t) {
         if (thread) {
             sthread_enqueue(terminate_queue, thread);
         }
+        splx(oldvalue);
         return ESRCH;
     }
+
     void *ret = thread->ret;
     sthread_free(thread);
+    splx(oldvalue);
+    assert(oldvalue == LOW);
+
     return ret;
 }
 
 void sthread_user_yield(void) {
+    int oldvalue = splx(HIGH);
+
     // 调度
     running_thread->status = RUNNABLE;
     sthread_enqueue(ready_queue, running_thread);
+
     schedule();
+    splx(oldvalue);
+    assert(oldvalue == LOW);
 }
 
 static void schedule() {
@@ -185,8 +205,12 @@ static void schedule() {
 }
 
 static void sthread_free(sthread_t thread) {
+    int oldvalue = splx(HIGH);
+
     sthread_free_ctx(thread->saved_ctx);
     sthread_free_queue(thread->wait_queue);
+    splx(oldvalue);
+
     free(thread);
 }
 
