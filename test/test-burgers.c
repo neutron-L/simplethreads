@@ -4,84 +4,127 @@
  *
  */
 
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <assert.h>
 
 #include <sthread.h>
 
-static int counter = 0;
-static int ran_thread = 0;
-static sthread_mutex_t mutex;
+#define STACK_SIZE 32
 
-void *thread_start(void *arg);
+static int N, M, burgers;
+static int next_burger;
+static int done;
+static sthread_mutex_t mutex;
+static sthread_cond_t not_empty;
+static sthread_cond_t not_full;
+
+static int stack[STACK_SIZE];
+static int top;
+
+static void *thread_cook(void *arg);
+static void *thread_student(void *arg);
 
 int main(int argc, char **argv) {
-  int checks;
-
-  printf("Testing sthread_mutex_*, impl: %s\n",
-         (sthread_get_impl() == STHREAD_PTHREAD_IMPL) ? "pthread" : "user");
-
-  sthread_init();
-
-  mutex = sthread_mutex_init();
-  sthread_mutex_lock(mutex);
-
-  if (sthread_create(thread_start, NULL, 0) == NULL) {
-    printf("sthread_create failed\n");
-    exit(1);
-  }
-
-  /* Wait until the other thread has at least started,
-   * to give it a chance at getting through the mutex incorrectly. */
-  while (ran_thread == 0)
-    sthread_yield();
-
-  /* The other thread has run, but shouldn't have been
-   * able to affect counter (note that this is not a great test
-   * for preemptive scheduler, since the other thread's sequence
-   * is not atomic). */   
-  assert(counter == 0);
-
-  /* This should let the other thread run at some point. */
-  sthread_mutex_unlock(mutex);
-
-  /* Allow up to 100 checks in case the scheduler doesn't
-   * decide to run the other thread for a really long time. */
-  checks = 100;
-  while (checks > 0) {
-    sthread_mutex_lock(mutex);
-    if (counter != 0) {
-      /* The other thread ran, got the lock,
-       * and incrmented the counter: test passes. */
-      checks = -1;
-    } else {
-      checks--;
+    if (argc != 4) {
+        printf("usage: %s <cooks> <students> <burgers>\n", argv[0]);
+        return 0;
     }
-    sthread_mutex_unlock(mutex);
+    printf("Testing sthread_mutex_*, impl: %s\n",
+           (sthread_get_impl() == STHREAD_PTHREAD_IMPL) ? "pthread" : "user");
+    N = atoi(argv[1]);
+    M = atoi(argv[2]);
+    burgers = atoi(argv[4]);
 
-    /* Nudge the scheduler to run the other thread: */
-    sthread_yield();
-  }
+    sthread_init();
 
-  if (checks == -1)
-    printf("sthread_mutex passed\n");
-  else
-    printf("*** sthread_mutex failed\n");
+    mutex = sthread_mutex_init();
+    not_empty = sthread_cond_init();
+    not_full = sthread_cond_init();
 
-  sthread_mutex_free(mutex);
-  return 0;
+    sthread_t cooks[N];
+    sthread_t students[M];
+
+    for (int i = 0; i < N; ++i) {
+        if ((cooks[i] = sthread_create(thread_cook, NULL, 0)) == NULL) {
+            printf("sthread_create failed\n");
+            exit(1);
+        }
+    }
+
+    for (int i = 0; i < M; ++i) {
+        if ((students[i] = sthread_create(thread_student, NULL, 0)) == NULL) {
+            printf("sthread_create failed\n");
+            exit(1);
+        }
+    }
+
+    for (int i = 0; i < N; ++i) {
+        sthread_join(cooks[i]);
+    }
+
+    for (int i = 0; i < M; ++i) {
+        sthread_join(students[i]);
+    }
+
+    return 0;
 }
 
-/* Try and get the lock.
- * When acquired, mark a global to let main know. */
-void *thread_start(void *arg) {
-  /* indicate we got in to this thread. Don't try to printf() here
-   * though, or the check in the main thread will fail sometimes. */
-  ran_thread = 1;
-  /* should wait until main() has released us */
-  sthread_mutex_lock(mutex);
-  counter++;
-  sthread_mutex_unlock(mutex);
-  return 0;
+static void *thread_cook(void *arg) {
+    (void)arg;
+
+    int done_ = 0;
+
+    while (!done_) {
+        sthread_mutex_lock(mutex);
+        while (top == STACK_SIZE && !done) {
+            sthread_cond_wait(not_full, mutex);
+        }
+        if (done) {
+            done_ = done;
+            sthread_cond_broadcast(not_empty);
+        } else {
+            printf("cook burger [%d]\n", next_burger);
+            stack[top++] = next_burger++;
+            if (next_burger == burgers) {
+                done = 1;
+                done_ = done;
+                sthread_cond_broadcast(not_empty);
+            } else {
+                sthread_cond_signal(not_empty);
+            }
+        }
+        sthread_mutex_unlock(mutex);
+
+        sthread_yield();
+    }
+}
+
+static void *thread_student(void *arg) {
+    (void)arg;
+
+    int done_ = 0;
+
+    while (!done_) {
+        sthread_mutex_lock(mutex);
+        while (top == 0 && !done) {
+            sthread_cond_wait(not_empty, mutex);
+        }
+        if (done) {
+            done_ = done;
+            sthread_cond_broadcast(not_full);
+        } else {
+            printf("cook burger [%d]\n", next_burger);
+            stack[top++] = next_burger++;
+            if (next_burger == burgers) {
+                done = 1;
+                done_ = done;
+                sthread_cond_broadcast(not_full);
+            } else {
+                sthread_cond_signal(not_full);
+            }
+        }
+        sthread_mutex_unlock(mutex);
+        sthread_yield();
+    }
 }
