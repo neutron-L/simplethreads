@@ -25,7 +25,7 @@
 #include <errno.h>
 #include <signal.h>
 
-#define DEBUG 1
+#define DEBUG 0
 
 #define DEBUG_PRINT(fmt, ...)                      \
     do {                                           \
@@ -96,7 +96,6 @@ sthread_t sthread_user_create(sthread_start_func_t start_routine, void *arg,
 
     sthread_enqueue(ready_queue, thread);
     splx(oldvalue);
-
     return thread;
 }
 
@@ -215,6 +214,7 @@ static void sthread_free(sthread_t thread) {
 }
 
 static void sthread_stub(void) {
+    splx(LOW);
     void *ret = (void *)running_thread->start_routine(running_thread->arg);
     sthread_user_exit(ret);
 }
