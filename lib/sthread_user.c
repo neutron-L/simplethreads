@@ -169,7 +169,6 @@ void sthread_user_yield(void) {
 
     schedule();
     splx(oldvalue);
-    assert(oldvalue == LOW);
 }
 
 static void schedule() {
@@ -252,6 +251,8 @@ void sthread_user_mutex_free(sthread_mutex_t lock) {
 }
 
 void sthread_user_mutex_lock(sthread_mutex_t lock) {
+    int oldvalue = splx(HIGH);
+
     while (lock->status == LOCKED) {
         running_thread->status = BLOCK;
         sthread_enqueue(lock->wait_queue, running_thread);
@@ -260,9 +261,12 @@ void sthread_user_mutex_lock(sthread_mutex_t lock) {
     lock->status = LOCKED;
     lock->owner = running_thread->tid;
     DEBUG_PRINT("%d get lock\n", running_thread->tid);
+    splx(oldvalue);
 }
 
 void sthread_user_mutex_unlock(sthread_mutex_t lock) {
+    int oldvalue = splx(HIGH);
+
     assert(lock->owner == running_thread->tid);
     assert(lock->status == LOCKED);
     lock->status = UNLOCKED;
@@ -274,6 +278,7 @@ void sthread_user_mutex_unlock(sthread_mutex_t lock) {
         sthread_enqueue(ready_queue, thread);
     }
     DEBUG_PRINT("%d release lock\n", running_thread->tid);
+    splx(oldvalue);
 }
 
 struct _sthread_cond {
@@ -295,29 +300,37 @@ void sthread_user_cond_free(sthread_cond_t cond) {
 }
 
 void sthread_user_cond_signal(sthread_cond_t cond) {
+    int oldvalue = splx(HIGH);
+
     sthread_t thread;
     if ((thread = sthread_dequeue(cond->wait_queue))) {
         thread->status = RUNNABLE;
         DEBUG_PRINT("%d to ready\n", thread->tid);
         sthread_enqueue(ready_queue, thread);
     }
+    splx(oldvalue);
 }
 
 void sthread_user_cond_broadcast(sthread_cond_t cond) {
+    int oldvalue = splx(HIGH);
+
     sthread_t thread;
     while ((thread = sthread_dequeue(cond->wait_queue))) {
         thread->status = RUNNABLE;
         DEBUG_PRINT("%d to ready\n", thread->tid);
         sthread_enqueue(ready_queue, thread);
     }
+    splx(oldvalue);
 }
 
 void sthread_user_cond_wait(sthread_cond_t cond,
                             sthread_mutex_t lock) {
+    int oldvalue = splx(HIGH);
     running_thread->status = BLOCK;
     DEBUG_PRINT("%d to wait cond\n", running_thread->tid);
     sthread_enqueue(cond->wait_queue, running_thread);
     sthread_user_mutex_unlock(lock);
     schedule();
     sthread_user_mutex_lock(lock);
+    splx(oldvalue);
 }
